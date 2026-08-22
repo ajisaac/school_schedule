@@ -28,6 +28,7 @@
 #include <QSet>
 #include <QTabWidget>
 #include <QTextStream>
+#include <QTimer>
 #include <QTreeWidget>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -533,8 +534,12 @@ int main(int argc, char* argv[]) {
 
     auto refresh = [&allAssignments, &classColors, assignmentList, editAssignmentButton,
             deleteAssignmentButton, legendLabel, showMonth, showClasses]() {
+        // Outstanding work first, then anything ticked off, each by date.
         std::ranges::stable_sort(allAssignments,
                                  [](const Assignment& lhs, const Assignment& rhs) {
+                                     if (lhs.done != rhs.done) {
+                                         return !lhs.done;
+                                     }
                                      return lhs.date < rhs.date;
                                  });
         classColors = colorsForClasses(allAssignments);
@@ -649,7 +654,7 @@ int main(int argc, char* argv[]) {
     // Ticking a box marks the assignment done and writes it straight back to disk.
     QObject::connect(assignmentList, &QTreeWidget::itemChanged,
                      [&window, &allAssignments, &resourcesByClass, &classColors,
-                         showMonth, showClasses](QTreeWidgetItem* item, int) {
+                         showMonth, showClasses, refresh](QTreeWidgetItem* item, int) {
                          const int index = item->data(0, Qt::UserRole).toInt();
                          if (index < 0 || index >= allAssignments.size()) {
                              return;
@@ -667,6 +672,11 @@ int main(int argc, char* argv[]) {
                          if (!saveData(allAssignments, resourcesByClass, &error)) {
                              QMessageBox::warning(&window, "Save Failed", error);
                          }
+
+                         // Rebuilding the rows has to wait until this signal is
+                         // done with them; then the row drops to the bottom with
+                         // the rest of the finished work.
+                         QTimer::singleShot(0, refresh);
                      });
 
     QObject::connect(prevMonthButton, &QPushButton::clicked, [&shownMonth, showMonth]() {
