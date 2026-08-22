@@ -10,6 +10,8 @@
 #include <QFont>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QComboBox>
+#include <QDateEdit>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -18,7 +20,6 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
-#include <QListWidget>
 #include <QMainWindow>
 #include <QMap>
 #include <QMessageBox>
@@ -98,7 +99,8 @@ static QList<Assignment> parseAssignments(const QString& text) {
                                  match.captured(2).toInt(),
                                  resolveYear(match.captured(3)));
             title = match.captured(4).trimmed();
-        } else if (const auto numeric = numericDate.match(line); numeric.hasMatch()) {
+        }
+        else if (const auto numeric = numericDate.match(line); numeric.hasMatch()) {
             date = QDate(resolveYear(numeric.captured(3)),
                          numeric.captured(1).toInt(),
                          numeric.captured(2).toInt());
@@ -107,7 +109,8 @@ static QList<Assignment> parseAssignments(const QString& text) {
 
         if (date.isValid() && !title.isEmpty()) {
             assignments.append({date, title, className});
-        } else {
+        }
+        else {
             className = line;
         }
     }
@@ -135,6 +138,54 @@ static QMap<QString, QColor> colorsForClasses(const QList<Assignment>& assignmen
         }
     }
     return colors;
+}
+
+// Asks for one assignment. The class box lists the classes already loaded but
+// stays editable, so a brand new class can just be typed in.
+static bool promptForAssignment(QWidget* parent, const QString& title,
+                                const QStringList& classNames, Assignment* assignment) {
+    QDialog dialog(parent);
+    dialog.setWindowTitle(title);
+
+    auto* form = new QFormLayout(&dialog);
+
+    auto* classBox = new QComboBox(&dialog);
+    classBox->setEditable(true);
+    classBox->addItems(classNames);
+    classBox->setCurrentText(assignment->className);
+
+    auto* dateField = new QDateEdit(&dialog);
+    dateField->setCalendarPopup(true);
+    dateField->setDisplayFormat("MMM d, yyyy");
+    dateField->setDate(assignment->date.isValid()
+                           ? assignment->date
+                           : QDate::currentDate());
+
+    auto* titleField = new QLineEdit(assignment->title, &dialog);
+
+    form->addRow("Class:", classBox);
+    form->addRow("Date:", dateField);
+    form->addRow("Assignment:", titleField);
+
+    auto* buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    form->addRow(buttons);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return false;
+    }
+    if (classBox->currentText().trimmed().isEmpty() ||
+        titleField->text().trimmed().isEmpty()) {
+        return false;
+    }
+
+    *assignment = {
+        dateField->date(), titleField->text().trimmed(),
+        classBox->currentText().trimmed(), assignment->done
+    };
+    return true;
 }
 
 // Asks for a resource's text and link together. Returns false if cancelled or
@@ -232,8 +283,10 @@ static void loadSavedData(QList<Assignment>* assignments,
         const QDate date = QDate::fromString(object["date"].toString(), Qt::ISODate);
         const QString title = object["title"].toString();
         if (date.isValid() && !title.isEmpty()) {
-            assignments->append({date, title, object["class"].toString(),
-                                 object["done"].toBool()});
+            assignments->append({
+                date, title, object["class"].toString(),
+                object["done"].toBool()
+            });
         }
     }
 
@@ -250,12 +303,22 @@ static void loadSavedData(QList<Assignment>* assignments,
     }
 }
 
+// Done rows go grey and struck through across every column.
+static void styleAssignmentRow(QTreeWidgetItem* item, bool done, const QColor& classColor) {
+    QFont rowFont = item->font(0);
+    rowFont.setStrikeOut(done);
+    for (int column = 0; column < item->columnCount(); ++column) {
+        item->setFont(column, rowFont);
+        item->setForeground(column, done ? doneColor : classColor);
+    }
+}
+
 int main(int argc, char* argv[]) {
     QApplication a(argc, argv);
 
     QMainWindow window;
     window.setWindowTitle("School Schedule");
-    window.resize(800, 600);
+    window.resize(1200, 900);
 
     auto* tabs = new QTabWidget(&window);
     window.setCentralWidget(tabs);
@@ -265,9 +328,23 @@ int main(int argc, char* argv[]) {
     auto* assignmentsLayout = new QVBoxLayout(assignmentsTab);
 
     auto* uploadButton = new QPushButton("Upload File...", assignmentsTab);
-    auto* assignmentList = new QListWidget(assignmentsTab);
+    auto* addAssignmentButton = new QPushButton("Add Assignment...", assignmentsTab);
+    auto* editAssignmentButton = new QPushButton("Edit Assignment...", assignmentsTab);
+    auto* deleteAssignmentButton = new QPushButton("Delete Assignment", assignmentsTab);
+    editAssignmentButton->setEnabled(false);
+    deleteAssignmentButton->setEnabled(false);
+    auto* assignmentList = new QTreeWidget(assignmentsTab);
+    assignmentList->setColumnCount(3);
+    assignmentList->setHeaderLabels({"Date", "Class", "Assignment"});
+    assignmentList->setRootIsDecorated(false);
 
-    assignmentsLayout->addWidget(uploadButton);
+    auto* assignmentButtons = new QHBoxLayout();
+    assignmentButtons->addWidget(uploadButton);
+    assignmentButtons->addWidget(addAssignmentButton);
+    assignmentButtons->addWidget(editAssignmentButton);
+    assignmentButtons->addWidget(deleteAssignmentButton);
+
+    assignmentsLayout->addLayout(assignmentButtons);
     assignmentsLayout->addWidget(assignmentList);
     tabs->addTab(assignmentsTab, "Assignments");
 
@@ -368,7 +445,7 @@ int main(int argc, char* argv[]) {
                                              ? doneColor
                                              : classColors.value(assignment.className);
                     cellText += QString(R"(<div style="color:%1">%2</div>)")
-                                    .arg(color.name(), title);
+                        .arg(color.name(), title);
                 }
             }
             dayCells.at(cell)->setText(cellText);
@@ -399,8 +476,8 @@ int main(int argc, char* argv[]) {
     };
 
     auto showClasses = [&allAssignments, &classColors, &resourcesByClass, classTree,
-                        addResourceButton, editResourceButton, selectedClass,
-                        selectedResourceIndex]() {
+            addResourceButton, editResourceButton, selectedClass,
+            selectedResourceIndex]() {
         QMap<QString, int> totalPerClass;
         QMap<QString, int> donePerClass;
         for (const Assignment& assignment : allAssignments) {
@@ -419,9 +496,9 @@ int main(int argc, char* argv[]) {
             const int completed = donePerClass.value(it.key());
             auto* classItem = new QTreeWidgetItem(classTree);
             classItem->setText(0, QString("%1  -  %2 assignments, %3 done")
-                                      .arg(it.key())
-                                      .arg(total)
-                                      .arg(completed));
+                                  .arg(it.key())
+                                  .arg(total)
+                                  .arg(completed));
             classItem->setForeground(0, it.value());
             classItem->setData(0, Qt::UserRole, it.key());
 
@@ -430,8 +507,9 @@ int main(int argc, char* argv[]) {
             for (int index = 0; index < classResources.size(); ++index) {
                 const Resource& resource = classResources.at(index);
                 auto* resourceItem = new QTreeWidgetItem(classItem);
-                resourceItem->setText(0, resource.text.isEmpty() ? resource.href
-                                                                 : resource.text);
+                resourceItem->setText(0, resource.text.isEmpty()
+                                             ? resource.href
+                                             : resource.text);
                 resourceItem->setData(0, Qt::UserRole + 1, resource.href);
                 resourceItem->setData(0, Qt::UserRole + 2, index);
                 resourceItem->setToolTip(0, resource.href);
@@ -453,8 +531,8 @@ int main(int argc, char* argv[]) {
         editResourceButton->setEnabled(selectedResourceIndex() >= 0);
     };
 
-    auto refresh = [&allAssignments, &classColors, assignmentList,
-                    legendLabel, showMonth, showClasses]() {
+    auto refresh = [&allAssignments, &classColors, assignmentList, editAssignmentButton,
+            deleteAssignmentButton, legendLabel, showMonth, showClasses]() {
         std::ranges::stable_sort(allAssignments,
                                  [](const Assignment& lhs, const Assignment& rhs) {
                                      return lhs.date < rhs.date;
@@ -466,29 +544,30 @@ int main(int argc, char* argv[]) {
         assignmentList->clear();
         for (int index = 0; index < allAssignments.size(); ++index) {
             const Assignment& assignment = allAssignments.at(index);
-            auto* item = new QListWidgetItem(
-                assignment.date.toString("MMM d, ddd") + "  -  " +
-                assignment.className + "  -  " + assignment.title);
-            item->setForeground(assignment.done ? doneColor
-                                                : classColors.value(assignment.className));
+            auto* item = new QTreeWidgetItem(assignmentList);
+            item->setText(0, assignment.date.toString("MMM d, ddd"));
+            item->setText(1, assignment.className);
+            item->setText(2, assignment.title);
             item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
-            item->setCheckState(assignment.done ? Qt::Checked : Qt::Unchecked);
-            item->setData(Qt::UserRole, index);
-
-            QFont itemFont = item->font();
-            itemFont.setStrikeOut(assignment.done);
-            item->setFont(itemFont);
-
-            assignmentList->addItem(item);
+            item->setCheckState(0, assignment.done ? Qt::Checked : Qt::Unchecked);
+            item->setData(0, Qt::UserRole, index);
+            styleAssignmentRow(item, assignment.done,
+                               classColors.value(assignment.className));
         }
         assignmentList->blockSignals(false);
+        for (int column = 0; column < 3; ++column) {
+            assignmentList->resizeColumnToContents(column);
+        }
+        const bool hasSelection = assignmentList->currentItem() != nullptr;
+        editAssignmentButton->setEnabled(hasSelection);
+        deleteAssignmentButton->setEnabled(hasSelection);
 
         showClasses();
 
         QStringList legendParts;
         for (auto it = classColors.constBegin(); it != classColors.constEnd(); ++it) {
             legendParts.append(QString(R"(<span style="color:%1">&#9632; %2</span>)")
-                                   .arg(it.value().name(), it.key().toHtmlEscaped()));
+                .arg(it.value().name(), it.key().toHtmlEscaped()));
         }
         legendLabel->setText(legendParts.join("&nbsp;&nbsp;&nbsp;"));
 
@@ -497,18 +576,18 @@ int main(int argc, char* argv[]) {
 
     QObject::connect(classTree, &QTreeWidget::currentItemChanged,
                      [addResourceButton, editResourceButton, selectedClass,
-                      selectedResourceIndex](QTreeWidgetItem*, QTreeWidgetItem*) {
-        addResourceButton->setEnabled(!selectedClass().isEmpty());
-        editResourceButton->setEnabled(selectedResourceIndex() >= 0);
-    });
+                         selectedResourceIndex](QTreeWidgetItem*, QTreeWidgetItem*) {
+                         addResourceButton->setEnabled(!selectedClass().isEmpty());
+                         editResourceButton->setEnabled(selectedResourceIndex() >= 0);
+                     });
 
     // Resource rows get the browser's pointing hand; class rows and empty space
     // keep the normal arrow.
     QObject::connect(classTree, &QTreeWidget::itemEntered,
                      [classTree](QTreeWidgetItem* item, int) {
-        const bool isLink = !item->data(0, Qt::UserRole + 1).toString().isEmpty();
-        classTree->viewport()->setCursor(isLink ? Qt::PointingHandCursor : Qt::ArrowCursor);
-    });
+                         const bool isLink = !item->data(0, Qt::UserRole + 1).toString().isEmpty();
+                         classTree->viewport()->setCursor(isLink ? Qt::PointingHandCursor : Qt::ArrowCursor);
+                     });
     QObject::connect(classTree, &QTreeWidget::viewportEntered, [classTree]() {
         classTree->viewport()->setCursor(Qt::ArrowCursor);
     });
@@ -523,75 +602,72 @@ int main(int argc, char* argv[]) {
 
     QObject::connect(addResourceButton, &QPushButton::clicked,
                      [&window, &allAssignments, &resourcesByClass, selectedClass,
-                      showClasses]() {
-        const QString className = selectedClass();
-        if (className.isEmpty()) {
-            return;
-        }
+                         showClasses]() {
+                         const QString className = selectedClass();
+                         if (className.isEmpty()) {
+                             return;
+                         }
 
-        Resource resource;
-        if (!promptForResource(&window, "Add Resource", &resource)) {
-            return;
-        }
+                         Resource resource;
+                         if (!promptForResource(&window, "Add Resource", &resource)) {
+                             return;
+                         }
 
-        resourcesByClass[className].append(resource);
-        showClasses();
+                         resourcesByClass[className].append(resource);
+                         showClasses();
 
-        QString error;
-        if (!saveData(allAssignments, resourcesByClass, &error)) {
-            QMessageBox::warning(&window, "Save Failed", error);
-        }
-    });
+                         QString error;
+                         if (!saveData(allAssignments, resourcesByClass, &error)) {
+                             QMessageBox::warning(&window, "Save Failed", error);
+                         }
+                     });
 
     QObject::connect(editResourceButton, &QPushButton::clicked,
                      [&window, &allAssignments, &resourcesByClass, selectedClass,
-                      selectedResourceIndex, showClasses]() {
-        const QString className = selectedClass();
-        const int index = selectedResourceIndex();
-        if (className.isEmpty() || index < 0 ||
-            index >= resourcesByClass.value(className).size()) {
-            return;
-        }
+                         selectedResourceIndex, showClasses]() {
+                         const QString className = selectedClass();
+                         const int index = selectedResourceIndex();
+                         if (className.isEmpty() || index < 0 ||
+                             index >= resourcesByClass.value(className).size()) {
+                             return;
+                         }
 
-        Resource resource = resourcesByClass[className].at(index);
-        if (!promptForResource(&window, "Edit Resource", &resource)) {
-            return;
-        }
+                         Resource resource = resourcesByClass[className].at(index);
+                         if (!promptForResource(&window, "Edit Resource", &resource)) {
+                             return;
+                         }
 
-        resourcesByClass[className][index] = resource;
-        showClasses();
+                         resourcesByClass[className][index] = resource;
+                         showClasses();
 
-        QString error;
-        if (!saveData(allAssignments, resourcesByClass, &error)) {
-            QMessageBox::warning(&window, "Save Failed", error);
-        }
-    });
+                         QString error;
+                         if (!saveData(allAssignments, resourcesByClass, &error)) {
+                             QMessageBox::warning(&window, "Save Failed", error);
+                         }
+                     });
 
     // Ticking a box marks the assignment done and writes it straight back to disk.
-    QObject::connect(assignmentList, &QListWidget::itemChanged,
+    QObject::connect(assignmentList, &QTreeWidget::itemChanged,
                      [&window, &allAssignments, &resourcesByClass, &classColors,
-                      showMonth, showClasses](QListWidgetItem* item) {
-        const int index = item->data(Qt::UserRole).toInt();
-        if (index < 0 || index >= allAssignments.size()) {
-            return;
-        }
-        const Assignment& assignment = allAssignments[index];
-        allAssignments[index].done = item->checkState() == Qt::Checked;
+                         showMonth, showClasses](QTreeWidgetItem* item, int) {
+                         const int index = item->data(0, Qt::UserRole).toInt();
+                         if (index < 0 || index >= allAssignments.size()) {
+                             return;
+                         }
+                         const Assignment& assignment = allAssignments[index];
+                         allAssignments[index].done = item->checkState(0) == Qt::Checked;
 
-        QFont itemFont = item->font();
-        itemFont.setStrikeOut(assignment.done);
-        item->setFont(itemFont);
-        item->setForeground(assignment.done ? doneColor
-                                            : classColors.value(assignment.className));
+                         styleAssignmentRow(item, assignment.done,
+                                            classColors.value(assignment.className));
 
-        showMonth();
-        showClasses();
+                         showMonth();
+                         showClasses();
 
-        QString error;
-        if (!saveData(allAssignments, resourcesByClass, &error)) {
-            QMessageBox::warning(&window, "Save Failed", error);
-        }
-    });
+                         QString error;
+                         if (!saveData(allAssignments, resourcesByClass, &error)) {
+                             QMessageBox::warning(&window, "Save Failed", error);
+                         }
+                     });
 
     QObject::connect(prevMonthButton, &QPushButton::clicked, [&shownMonth, showMonth]() {
         shownMonth = shownMonth.addMonths(-1);
@@ -602,69 +678,152 @@ int main(int argc, char* argv[]) {
         showMonth();
     });
 
+    QObject::connect(addAssignmentButton, &QPushButton::clicked,
+                     [&window, &allAssignments, &resourcesByClass, &classColors,
+                         refresh]() {
+                         Assignment assignment;
+                         assignment.date = QDate::currentDate();
+                         if (!promptForAssignment(&window, "Add Assignment", classColors.keys(),
+                                                  &assignment)) {
+                             return;
+                         }
+
+                         allAssignments.append(assignment);
+                         refresh();
+
+                         QString error;
+                         if (!saveData(allAssignments, resourcesByClass, &error)) {
+                             QMessageBox::warning(&window, "Save Failed", error);
+                         }
+                     });
+
+    QObject::connect(assignmentList, &QTreeWidget::currentItemChanged,
+                     [editAssignmentButton, deleteAssignmentButton](QTreeWidgetItem* item,
+                                                                    QTreeWidgetItem*) {
+                         editAssignmentButton->setEnabled(item != nullptr);
+                         deleteAssignmentButton->setEnabled(item != nullptr);
+                     });
+
+    QObject::connect(editAssignmentButton, &QPushButton::clicked,
+                     [&window, &allAssignments, &resourcesByClass, &classColors,
+                         assignmentList, refresh]() {
+                         const QTreeWidgetItem* item = assignmentList->currentItem();
+                         if (!item) {
+                             return;
+                         }
+                         const int index = item->data(0, Qt::UserRole).toInt();
+                         if (index < 0 || index >= allAssignments.size()) {
+                             return;
+                         }
+
+                         Assignment assignment = allAssignments.at(index);
+                         if (!promptForAssignment(&window, "Edit Assignment", classColors.keys(),
+                                                  &assignment)) {
+                             return;
+                         }
+
+                         allAssignments[index] = assignment;
+                         refresh();
+
+                         QString error;
+                         if (!saveData(allAssignments, resourcesByClass, &error)) {
+                             QMessageBox::warning(&window, "Save Failed", error);
+                         }
+                     });
+
+    QObject::connect(deleteAssignmentButton, &QPushButton::clicked,
+                     [&window, &allAssignments, &resourcesByClass, assignmentList,
+                         refresh]() {
+                         const QTreeWidgetItem* item = assignmentList->currentItem();
+                         if (!item) {
+                             return;
+                         }
+                         const int index = item->data(0, Qt::UserRole).toInt();
+                         if (index < 0 || index >= allAssignments.size()) {
+                             return;
+                         }
+
+                         const Assignment& assignment = allAssignments.at(index);
+                         const auto answer = QMessageBox::question(
+                             &window, "Delete Assignment",
+                             "Delete this assignment?\n\n" + assignment.className + " - " +
+                             assignment.title);
+                         if (answer != QMessageBox::Yes) {
+                             return;
+                         }
+
+                         allAssignments.removeAt(index);
+                         refresh();
+
+                         QString error;
+                         if (!saveData(allAssignments, resourcesByClass, &error)) {
+                             QMessageBox::warning(&window, "Save Failed", error);
+                         }
+                     });
+
     QObject::connect(uploadButton, &QPushButton::clicked,
                      [&window, &allAssignments, &resourcesByClass, refresh]() {
-        const QString path = QFileDialog::getOpenFileName(
-            &window, "Open File", QString(), "All Files (*)");
-        if (path.isEmpty()) {
-            return;
-        }
+                         const QString path = QFileDialog::getOpenFileName(
+                             &window, "Open File", QString(), "All Files (*)");
+                         if (path.isEmpty()) {
+                             return;
+                         }
 
-        QFile file(path);
-        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            QMessageBox::warning(&window, "Upload Failed",
-                                 "Could not open file:\n" + path);
-            return;
-        }
+                         QFile file(path);
+                         if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                             QMessageBox::warning(&window, "Upload Failed",
+                                                  "Could not open file:\n" + path);
+                             return;
+                         }
 
-        QTextStream in(&file);
-        QList<Assignment> loaded = parseAssignments(in.readAll());
-        file.close();
+                         QTextStream in(&file);
+                         QList<Assignment> loaded = parseAssignments(in.readAll());
+                         file.close();
 
-        if (loaded.isEmpty()) {
-            QMessageBox::information(&window, "No Assignments",
-                                     "No dated assignments were found in:\n" + path);
-            return;
-        }
+                         if (loaded.isEmpty()) {
+                             QMessageBox::information(&window, "No Assignments",
+                                                      "No dated assignments were found in:\n" + path);
+                             return;
+                         }
 
-        // Re-uploading a class replaces what was already loaded for it rather
-        // than doubling it up.
-        QStringList loadedClasses;
-        for (const Assignment& assignment : loaded) {
-            if (!loadedClasses.contains(assignment.className)) {
-                loadedClasses.append(assignment.className);
-            }
-        }
-        // Re-uploading shouldn't clear the boxes already ticked, so carry the
-        // done flag over to any assignment that comes back unchanged.
-        QSet<QString> alreadyDone;
-        for (const Assignment& assignment : allAssignments) {
-            if (assignment.done) {
-                alreadyDone.insert(assignment.className + '\n' +
-                                   assignment.date.toString(Qt::ISODate) + '\n' +
-                                   assignment.title);
-            }
-        }
-        for (Assignment& assignment : loaded) {
-            assignment.done = alreadyDone.contains(assignment.className + '\n' +
-                                                   assignment.date.toString(Qt::ISODate) + '\n' +
-                                                   assignment.title);
-        }
+                         // Re-uploading a class replaces what was already loaded for it rather
+                         // than doubling it up.
+                         QStringList loadedClasses;
+                         for (const Assignment& assignment : loaded) {
+                             if (!loadedClasses.contains(assignment.className)) {
+                                 loadedClasses.append(assignment.className);
+                             }
+                         }
+                         // Re-uploading shouldn't clear the boxes already ticked, so carry the
+                         // done flag over to any assignment that comes back unchanged.
+                         QSet<QString> alreadyDone;
+                         for (const Assignment& assignment : allAssignments) {
+                             if (assignment.done) {
+                                 alreadyDone.insert(assignment.className + '\n' +
+                                     assignment.date.toString(Qt::ISODate) + '\n' +
+                                     assignment.title);
+                             }
+                         }
+                         for (Assignment& assignment : loaded) {
+                             assignment.done = alreadyDone.contains(assignment.className + '\n' +
+                                 assignment.date.toString(Qt::ISODate) + '\n' +
+                                 assignment.title);
+                         }
 
-        allAssignments.removeIf([&loadedClasses](const Assignment& assignment) {
-            return loadedClasses.contains(assignment.className);
-        });
-        allAssignments.append(loaded);
+                         allAssignments.removeIf([&loadedClasses](const Assignment& assignment) {
+                             return loadedClasses.contains(assignment.className);
+                         });
+                         allAssignments.append(loaded);
 
-        refresh();
+                         refresh();
 
-        QString error;
-        if (!saveData(allAssignments, resourcesByClass, &error)) {
-            QMessageBox::warning(&window, "Save Failed", error);
-        }
+                         QString error;
+                         if (!saveData(allAssignments, resourcesByClass, &error)) {
+                             QMessageBox::warning(&window, "Save Failed", error);
+                         }
 
-        window.setWindowTitle("School Schedule - " + QFileInfo(path).fileName());
-    });
+                         window.setWindowTitle("School Schedule - " + QFileInfo(path).fileName());
+                     });
 
     refresh();
     tabs->addTab(calendarTab, "Calendar");
