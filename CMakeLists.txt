@@ -13,13 +13,9 @@ find_package(Qt6 COMPONENTS
         Widgets
         REQUIRED)
 
-add_executable(school_schedule main.cpp)
+add_executable(school_schedule MACOSX_BUNDLE main.cpp)
 target_link_libraries(school_schedule
         Qt::Core
         Qt::Gui
         Qt::Widgets
-)
-
-set_target_properties(school_schedule PROPERTIES
-        MACOSX_BUNDLE TRUE
 )

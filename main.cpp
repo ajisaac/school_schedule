@@ -773,8 +773,11 @@ int main(int argc, char* argv[]) {
 
     QObject::connect(uploadButton, &QPushButton::clicked,
                      [&window, &allAssignments, &resourcesByClass, refresh]() {
+                         // Qt's own file dialog, rather than the native macOS
+                         // panel, which doesn't reliably open here.
                          const QString path = QFileDialog::getOpenFileName(
-                             &window, "Open File", QString(), "All Files (*)");
+                             &window, "Open File", QString(), "All Files (*)", nullptr,
+                             QFileDialog::DontUseNativeDialog);
                          if (path.isEmpty()) {
                              return;
                          }
