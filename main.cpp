@@ -119,6 +119,9 @@ static QList<Assignment> parseAssignments(const QString& text) {
     return assignments;
 }
 
+// First entry of the class filter, meaning no filtering at all.
+static const QString allClassesLabel = QStringLiteral("All Classes");
+
 // Anything ticked off drops to grey, whatever class it belongs to.
 static const QColor doneColor("#a0a0a0");
 
@@ -345,7 +348,15 @@ int main(int argc, char* argv[]) {
     assignmentButtons->addWidget(editAssignmentButton);
     assignmentButtons->addWidget(deleteAssignmentButton);
 
+    auto* filterRow = new QHBoxLayout();
+    auto* classFilterBox = new QComboBox(assignmentsTab);
+    classFilterBox->addItem(allClassesLabel);
+    filterRow->addWidget(new QLabel("Filter by class:", assignmentsTab));
+    filterRow->addWidget(classFilterBox);
+    filterRow->addStretch(1);
+
     assignmentsLayout->addLayout(assignmentButtons);
+    assignmentsLayout->addLayout(filterRow);
     assignmentsLayout->addWidget(assignmentList);
     tabs->addTab(assignmentsTab, "Assignments");
 
@@ -532,8 +543,9 @@ int main(int argc, char* argv[]) {
         editResourceButton->setEnabled(selectedResourceIndex() >= 0);
     };
 
-    auto refresh = [&allAssignments, &classColors, assignmentList, editAssignmentButton,
-            deleteAssignmentButton, legendLabel, showMonth, showClasses]() {
+    auto refresh = [&allAssignments, &classColors, assignmentList, classFilterBox,
+            editAssignmentButton, deleteAssignmentButton, legendLabel, showMonth,
+            showClasses]() {
         // Outstanding work first, then anything ticked off, each by date.
         std::ranges::stable_sort(allAssignments,
                                  [](const Assignment& lhs, const Assignment& rhs) {
@@ -544,11 +556,32 @@ int main(int argc, char* argv[]) {
                                  });
         classColors = colorsForClasses(allAssignments);
 
+        // Rebuild the filter's choices, keeping whatever class was picked.
+        const QString wasFiltered = classFilterBox->currentIndex() > 0
+                                        ? classFilterBox->currentText()
+                                        : QString();
+        classFilterBox->blockSignals(true);
+        classFilterBox->clear();
+        classFilterBox->addItem(allClassesLabel);
+        classFilterBox->addItems(classColors.keys());
+        const int filterIndex = wasFiltered.isEmpty() ? 0
+                                                      : classFilterBox->findText(wasFiltered);
+        classFilterBox->setCurrentIndex(filterIndex >= 0 ? filterIndex : 0);
+        classFilterBox->blockSignals(false);
+
+        // Empty means every class.
+        const QString filter = classFilterBox->currentIndex() > 0
+                                   ? classFilterBox->currentText()
+                                   : QString();
+
         // Refilling the list would otherwise fire itemChanged for every row.
         assignmentList->blockSignals(true);
         assignmentList->clear();
         for (int index = 0; index < allAssignments.size(); ++index) {
             const Assignment& assignment = allAssignments.at(index);
+            if (!filter.isEmpty() && assignment.className != filter) {
+                continue;
+            }
             auto* item = new QTreeWidgetItem(assignmentList);
             item->setText(0, assignment.date.toString("MMM d, ddd"));
             item->setText(1, assignment.className);
@@ -687,6 +720,11 @@ int main(int argc, char* argv[]) {
         shownMonth = shownMonth.addMonths(1);
         showMonth();
     });
+
+    QObject::connect(classFilterBox, &QComboBox::currentTextChanged,
+                     [refresh](const QString&) {
+                         refresh();
+                     });
 
     QObject::connect(addAssignmentButton, &QPushButton::clicked,
                      [&window, &allAssignments, &resourcesByClass, &classColors,
