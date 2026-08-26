@@ -146,21 +146,26 @@ static QString syncClassFilter(QComboBox* box, const QStringList& classNames) {
     return currentClassFilter(box);
 }
 
-// Classes get a colour in the order they first show up, so a class keeps the
-// same colour on the calendar, in the list and in the legend.
+// Classes get a colour by name, in alphabetical order. Going by the order they
+// turn up in the assignment list would reshuffle every colour whenever that list
+// is re-sorted, which happens on every edit and every tick.
 static QMap<QString, QColor> colorsForClasses(const QList<Assignment>& assignments) {
     static const QList<QColor> palette = {
         QColor("#1f77b4"), QColor("#d62728"), QColor("#2ca02c"), QColor("#ff7f0e"),
         QColor("#9467bd"), QColor("#17becf"), QColor("#8c564b"), QColor("#e377c2"),
     };
 
-    QMap<QString, QColor> colors;
-    int next = 0;
+    QStringList classNames;
     for (const Assignment& assignment : assignments) {
-        if (!colors.contains(assignment.className)) {
-            colors.insert(assignment.className, palette.at(next % palette.size()));
-            ++next;
+        if (!classNames.contains(assignment.className)) {
+            classNames.append(assignment.className);
         }
+    }
+    classNames.sort();
+
+    QMap<QString, QColor> colors;
+    for (int index = 0; index < classNames.size(); ++index) {
+        colors.insert(classNames.at(index), palette.at(index % palette.size()));
     }
     return colors;
 }
