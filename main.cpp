@@ -125,6 +125,27 @@ static const QString allClassesLabel = QStringLiteral("All Classes");
 // Anything ticked off drops to grey, whatever class it belongs to.
 static const QColor doneColor("#a0a0a0");
 
+// The class a filter box is set to; empty means every class.
+static QString currentClassFilter(const QComboBox* box) {
+    return box->currentIndex() > 0 ? box->currentText() : QString();
+}
+
+// Refills a filter box with the classes that exist now, holding on to whatever
+// was picked, and answers with the class to filter by.
+static QString syncClassFilter(QComboBox* box, const QStringList& classNames) {
+    const QString wasFiltered = currentClassFilter(box);
+
+    box->blockSignals(true);
+    box->clear();
+    box->addItem(allClassesLabel);
+    box->addItems(classNames);
+    const int index = wasFiltered.isEmpty() ? 0 : box->findText(wasFiltered);
+    box->setCurrentIndex(index >= 0 ? index : 0);
+    box->blockSignals(false);
+
+    return currentClassFilter(box);
+}
+
 // Classes get a colour in the order they first show up, so a class keeps the
 // same colour on the calendar, in the list and in the legend.
 static QMap<QString, QColor> colorsForClasses(const QList<Assignment>& assignments) {
@@ -395,6 +416,14 @@ int main(int argc, char* argv[]) {
     navBar->addWidget(nextMonthButton);
     calendarLayout->addLayout(navBar);
 
+    auto* calendarFilterRow = new QHBoxLayout();
+    auto* calendarFilterBox = new QComboBox(calendarTab);
+    calendarFilterBox->addItem(allClassesLabel);
+    calendarFilterRow->addWidget(new QLabel("Filter by class:", calendarTab));
+    calendarFilterRow->addWidget(calendarFilterBox);
+    calendarFilterRow->addStretch(1);
+    calendarLayout->addLayout(calendarFilterRow);
+
     auto* legendLabel = new QLabel(calendarTab);
     legendLabel->setAlignment(Qt::AlignCenter);
     legendLabel->setWordWrap(true);
@@ -431,7 +460,10 @@ int main(int argc, char* argv[]) {
     loadSavedData(&allAssignments, &resourcesByClass);
 
     QDate shownMonth = QDate::currentDate();
-    auto showMonth = [&shownMonth, &allAssignments, &classColors, monthLabel, dayCells]() {
+    auto showMonth = [&shownMonth, &allAssignments, &classColors, monthLabel, dayCells,
+                calendarFilterBox]() {
+        const QString filter = currentClassFilter(calendarFilterBox);
+
         const QDate firstOfMonth(shownMonth.year(), shownMonth.month(), 1);
         monthLabel->setText(firstOfMonth.toString("MMMM yyyy"));
 
@@ -449,6 +481,9 @@ int main(int argc, char* argv[]) {
             const QDate day(shownMonth.year(), shownMonth.month(), dayNumber);
             QString cellText = QString("<b>%1</b>").arg(dayNumber);
             for (const Assignment& assignment : allAssignments) {
+                if (!filter.isEmpty() && assignment.className != filter) {
+                    continue;
+                }
                 if (assignment.date == day) {
                     const QString title = assignment.done
                                               ? "<s>" + assignment.title.toHtmlEscaped() + "</s>"
@@ -544,8 +579,8 @@ int main(int argc, char* argv[]) {
     };
 
     auto refresh = [&allAssignments, &classColors, assignmentList, classFilterBox,
-            editAssignmentButton, deleteAssignmentButton, legendLabel, showMonth,
-            showClasses]() {
+            calendarFilterBox, editAssignmentButton, deleteAssignmentButton, legendLabel,
+            showMonth, showClasses]() {
         // Outstanding work first, then anything ticked off, each by date.
         std::ranges::stable_sort(allAssignments,
                                  [](const Assignment& lhs, const Assignment& rhs) {
@@ -556,23 +591,9 @@ int main(int argc, char* argv[]) {
                                  });
         classColors = colorsForClasses(allAssignments);
 
-        // Rebuild the filter's choices, keeping whatever class was picked.
-        const QString wasFiltered = classFilterBox->currentIndex() > 0
-                                        ? classFilterBox->currentText()
-                                        : QString();
-        classFilterBox->blockSignals(true);
-        classFilterBox->clear();
-        classFilterBox->addItem(allClassesLabel);
-        classFilterBox->addItems(classColors.keys());
-        const int filterIndex = wasFiltered.isEmpty() ? 0
-                                                      : classFilterBox->findText(wasFiltered);
-        classFilterBox->setCurrentIndex(filterIndex >= 0 ? filterIndex : 0);
-        classFilterBox->blockSignals(false);
-
-        // Empty means every class.
-        const QString filter = classFilterBox->currentIndex() > 0
-                                   ? classFilterBox->currentText()
-                                   : QString();
+        // Rebuild both filters' choices, keeping whatever class was picked.
+        const QString filter = syncClassFilter(classFilterBox, classColors.keys());
+        syncClassFilter(calendarFilterBox, classColors.keys());
 
         // Refilling the list would otherwise fire itemChanged for every row.
         assignmentList->blockSignals(true);
@@ -710,6 +731,11 @@ int main(int argc, char* argv[]) {
                          // done with them; then the row drops to the bottom with
                          // the rest of the finished work.
                          QTimer::singleShot(0, refresh);
+                     });
+
+    QObject::connect(calendarFilterBox, &QComboBox::currentTextChanged,
+                     [showMonth](const QString&) {
+                         showMonth();
                      });
 
     QObject::connect(prevMonthButton, &QPushButton::clicked, [&shownMonth, showMonth]() {
