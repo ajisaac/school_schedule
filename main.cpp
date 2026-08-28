@@ -2,6 +2,7 @@
 #include <QColor>
 #include <QCursor>
 #include <QDate>
+#include <QDebug>
 #include <QFile>
 #include <QFileDialog>
 #include <QDesktopServices>
@@ -245,8 +246,7 @@ static bool promptForResource(QWidget* parent, const QString& title, Resource* r
 
 // Everything that has ever been uploaded lives here, so the schedule is back
 // the next time the program starts.
-static const QString dataFilePath =
-    QStringLiteral("/Users/aaron/program_data/school_schedule/data.json");
+static const QString dataFilePath = QStringLiteral("/Users/aaron/program_data/school_schedule/data.json");
 
 static bool saveData(const QList<Assignment>& assignments,
                      const QMap<QString, QList<Resource>>& resources,
@@ -300,8 +300,16 @@ static void loadSavedData(QList<Assignment>* assignments,
     if (!file.open(QIODevice::ReadOnly)) {
         return;
     }
-    const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
+    auto json = file.readAll();
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(json, &parseError);
     file.close();
+
+    if (parseError.error != QJsonParseError::NoError) {
+        qWarning() << "Could not read" << dataFilePath << "-" << parseError.errorString()
+                   << "at offset" << parseError.offset;
+        return;
+    }
 
     // Older files were a bare array of assignments with no resources.
     const QJsonObject root = document.object();
