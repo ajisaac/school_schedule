@@ -403,12 +403,15 @@ int main(int argc, char* argv[]) {
     classTree->setMouseTracking(true);
     auto* addResourceButton = new QPushButton("Add Resource...", classesTab);
     auto* editResourceButton = new QPushButton("Edit Resource...", classesTab);
+    auto* deleteResourceButton = new QPushButton("Delete Resource", classesTab);
     addResourceButton->setEnabled(false);
     editResourceButton->setEnabled(false);
+    deleteResourceButton->setEnabled(false);
 
     auto* resourceButtons = new QHBoxLayout();
     resourceButtons->addWidget(addResourceButton);
     resourceButtons->addWidget(editResourceButton);
+    resourceButtons->addWidget(deleteResourceButton);
 
     classesLayout->addWidget(classTree, 1);
     classesLayout->addLayout(resourceButtons);
@@ -536,7 +539,7 @@ int main(int argc, char* argv[]) {
     };
 
     auto showClasses = [&allAssignments, &classColors, &resourcesByClass, classTree,
-            addResourceButton, editResourceButton, selectedClass,
+            addResourceButton, editResourceButton, deleteResourceButton, selectedClass,
             selectedResourceIndex]() {
         QMap<QString, int> totalPerClass;
         QMap<QString, int> donePerClass;
@@ -589,6 +592,7 @@ int main(int argc, char* argv[]) {
 
         addResourceButton->setEnabled(!selectedClass().isEmpty());
         editResourceButton->setEnabled(selectedResourceIndex() >= 0);
+        deleteResourceButton->setEnabled(selectedResourceIndex() >= 0);
     };
 
     auto refresh = [&allAssignments, &classColors, assignmentList, classFilterBox,
@@ -647,10 +651,12 @@ int main(int argc, char* argv[]) {
     };
 
     QObject::connect(classTree, &QTreeWidget::currentItemChanged,
-                     [addResourceButton, editResourceButton, selectedClass,
+                     [addResourceButton, editResourceButton, deleteResourceButton,
+                         selectedClass,
                          selectedResourceIndex](QTreeWidgetItem*, QTreeWidgetItem*) {
                          addResourceButton->setEnabled(!selectedClass().isEmpty());
                          editResourceButton->setEnabled(selectedResourceIndex() >= 0);
+                         deleteResourceButton->setEnabled(selectedResourceIndex() >= 0);
                      });
 
     // Resource rows get the browser's pointing hand; class rows and empty space
@@ -686,6 +692,37 @@ int main(int argc, char* argv[]) {
                          }
 
                          resourcesByClass[className].append(resource);
+                         showClasses();
+
+                         QString error;
+                         if (!saveData(allAssignments, resourcesByClass, &error)) {
+                             QMessageBox::warning(&window, "Save Failed", error);
+                         }
+                     });
+
+    QObject::connect(deleteResourceButton, &QPushButton::clicked,
+                     [&window, &allAssignments, &resourcesByClass, selectedClass,
+                         selectedResourceIndex, showClasses]() {
+                         const QString className = selectedClass();
+                         const int index = selectedResourceIndex();
+                         if (className.isEmpty() || index < 0 ||
+                             index >= resourcesByClass.value(className).size()) {
+                             return;
+                         }
+
+                         const Resource& resource = resourcesByClass[className].at(index);
+                         const auto answer = QMessageBox::question(
+                             &window, "Delete Resource",
+                             "Delete this resource?\n\n" +
+                             (resource.text.isEmpty() ? resource.href : resource.text));
+                         if (answer != QMessageBox::Yes) {
+                             return;
+                         }
+
+                         resourcesByClass[className].removeAt(index);
+                         if (resourcesByClass.value(className).isEmpty()) {
+                             resourcesByClass.remove(className);
+                         }
                          showClasses();
 
                          QString error;
